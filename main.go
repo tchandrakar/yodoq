@@ -15,7 +15,7 @@ import (
 // TestClock implements solution.Clock with manual advancement.
 type TestClock struct{ now int64 }
 
-func (c *TestClock) Now() int64           { return c.now }
+func (c *TestClock) Now() int64            { return c.now }
 func (c *TestClock) Advance(deltaMS int64) { c.now += deltaMS }
 
 // ExecutionLedger is the harness's out-of-band ground truth: how many times
@@ -23,7 +23,7 @@ func (c *TestClock) Advance(deltaMS int64) { c.now += deltaMS }
 // what the queue thinks, and is the basis for grading.
 type ExecutionLedger struct{ counts map[string]int }
 
-func NewLedger() *ExecutionLedger { return &ExecutionLedger{counts: map[string]int{}} }
+func NewLedger() *ExecutionLedger              { return &ExecutionLedger{counts: map[string]int{}} }
 func (l *ExecutionLedger) Record(jobID string) { l.counts[jobID]++ }
 
 func (l *ExecutionLedger) Lost(allIDs []string) int {
@@ -135,10 +135,10 @@ func runUntilDrained(q *solution.JobQueue, clock *TestClock, workers []*Worker) 
 // Logger
 // =============================================================================
 
-func info(msg string)    { fmt.Printf("[INFO] %s\n", msg) }
+func info(msg string)     { fmt.Printf("[INFO] %s\n", msg) }
 func successf(msg string) { fmt.Printf("[SUCCESS] ✓ %s\n", msg) }
-func errf(msg string)    { fmt.Printf("[ERROR] ✗ %s\n", msg) }
-func warn(msg string)    { fmt.Printf("[WARNING] ⚠ %s\n", msg) }
+func errf(msg string)     { fmt.Printf("[ERROR] ✗ %s\n", msg) }
+func warn(msg string)     { fmt.Printf("[WARNING] ⚠ %s\n", msg) }
 
 func section(title string) {
 	fmt.Println()
