@@ -1,6 +1,10 @@
 package solution
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"sync"
+)
 
 // LeasedJob is what a worker receives when it successfully leases a job.
 type LeasedJob struct {
@@ -22,6 +26,22 @@ type Stats struct {
 	Completed int // acked successfully
 }
 
+type jobState int
+
+const (
+	statePending jobState = iota
+	stateLeased
+	stateCompleted
+)
+
+type job struct {
+	id             string
+	payload        []byte
+	state          jobState
+	leaseWorker    string
+	leaseExpiresAt int64
+}
+
 // JobQueue is what you implement.
 //
 // LEVELS TO IMPLEMENT:
@@ -30,59 +50,117 @@ type Stats struct {
 //  3. Bounded duplication under crash + dropped-ack rates of 0.1% to 50%
 type JobQueue struct {
 	clock Clock
-	// TODO: add your fields here
+
+	mu     sync.Mutex
+	jobs   map[string]*job
+	order  []string
+	nextID int64
 }
 
 // New constructs an empty queue using the given clock.
 func New(clock Clock) *JobQueue {
-	return &JobQueue{clock: clock}
+	return &JobQueue{
+		clock: clock,
+		jobs:  make(map[string]*job),
+	}
 }
 
 // Enqueue stores a new job for processing and returns its unique ID.
-//
-// TODO:
-//   - Generate an ID (any unique identifier)
-//   - Store the job in your "pending" state
-//   - Return the ID
 func (q *JobQueue) Enqueue(payload []byte) (string, error) {
-	return "", errors.New("not implemented")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.nextID++
+	id := fmt.Sprintf("job-%d", q.nextID)
+	q.jobs[id] = &job{
+		id:      id,
+		payload: payload,
+		state:   statePending,
+	}
+	q.order = append(q.order, id)
+	return id, nil
 }
 
 // Lease atomically reserves the next available job for `workerID` for
 // `leaseMS` milliseconds. Returns (nil, nil) when no job is available.
-//
-// TODO:
-//   - Find an unleased pending job (or a job whose lease has expired)
-//   - Mark it as leased to workerID until clock.Now() + leaseMS
-//   - Return the leased job
 func (q *JobQueue) Lease(workerID string, leaseMS int64) (*LeasedJob, error) {
-	return nil, errors.New("not implemented")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	now := q.clock.Now()
+	for _, id := range q.order {
+		j := q.jobs[id]
+		if j.state == stateCompleted {
+			continue
+		}
+		if j.state == stateLeased && j.leaseExpiresAt > now {
+			continue
+		}
+
+		j.state = stateLeased
+		j.leaseWorker = workerID
+		j.leaseExpiresAt = now + leaseMS
+		return &LeasedJob{
+			ID:             j.id,
+			Payload:        j.payload,
+			LeaseExpiresAt: j.leaseExpiresAt,
+		}, nil
+	}
+	return nil, nil
 }
 
 // Ack marks a job as completed. Should return an error if `workerID` is not
 // the current lease holder (e.g. the lease expired and was reassigned).
-//
-// TODO:
-//   - Validate workerID owns the current lease
-//   - Mark the job completed
-//   - Reject stale acks
 func (q *JobQueue) Ack(workerID, jobID string) error {
-	return errors.New("not implemented")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	j, ok := q.jobs[jobID]
+	if !ok {
+		return errors.New("job not found")
+	}
+	if j.state != stateLeased || j.leaseWorker != workerID {
+		return errors.New("worker does not hold the current lease for this job")
+	}
+	j.state = stateCompleted
+	j.leaseWorker = ""
+	return nil
 }
 
 // Fail releases the lease without completing. The job must become
 // immediately re-leasable.
-//
-// TODO:
-//   - Validate workerID owns the lease
-//   - Return the job to the pending state
 func (q *JobQueue) Fail(workerID, jobID string) error {
-	return errors.New("not implemented")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	j, ok := q.jobs[jobID]
+	if !ok {
+		return errors.New("job not found")
+	}
+	if j.state != stateLeased || j.leaseWorker != workerID {
+		return errors.New("worker does not hold the current lease for this job")
+	}
+	j.state = statePending
+	j.leaseWorker = ""
+	j.leaseExpiresAt = 0
+	return nil
 }
 
 // Stats returns counts of jobs by state. Used for harness progress checks.
-//
-// TODO: count pending / leased / completed jobs
 func (q *JobQueue) Stats() Stats {
-	return Stats{}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	var s Stats
+	for _, j := range q.jobs {
+		switch j.state {
+		case statePending:
+			s.Pending++
+		case stateLeased:
+			s.Leased++
+		case stateCompleted:
+			s.Completed++
+		}
+	}
+	return s
 }
