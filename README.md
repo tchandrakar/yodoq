@@ -8,14 +8,15 @@ A small Go exercise: build a reliable job queue that doesn't lose work even when
 
 The reference solution in [`solution/`](solution/) is implemented and passes all three harness levels (`go run .`): zero jobs lost at every crash/ack-drop rate from 0% to 50%, with duplication bounded roughly linearly to the failure rate. It also implements the Concurrency, Priorities, Fairness, and Exactly-once-ish advanced challenges — see "Advanced challenges" below.
 
-It's a single-process, in-memory `JobQueue`:
+It's a single-process, in-memory `JobQueue`, internally partitioned into `numShards` (16) independent shards (a Kafka-inspired internal redesign — see `docs/ai/kafka-inspired-redesign/`):
 
-- A `sync.Mutex`-guarded `map[string]*job` plus an `order []string` slice for FIFO insertion-order scanning
-- Each job tracks state (`pending` / `leased` / `completed` / `abandoned`), its current lease holder, lease-expiry time, priority, enqueue time, and attempt count
-- `Lease` scans `order` and picks the best eligible job by *effective* priority (base priority minus wait-time-based aging, floored at `PriorityHigh`), tie-breaking by insertion order — this degenerates to exactly "first pending-or-lease-expired job" when every job shares the same priority, which is always true for `main.go`
+- Each shard owns its own `sync.Mutex`, a `map[int64]*job` keyed by a per-shard offset, one ready FIFO per priority level in use, and a `container/heap` min-heap of currently-leased jobs ordered by lease expiry — no shard ever needs another shard's lock, and no operation scans every job
+- A job's external ID (`job-<shard>-<offset>`) encodes its shard, so `Ack`/`Fail` route straight to the owning shard
+- Each job tracks state (`pending` / `leased` / `completed` / `abandoned`), its current lease holder, lease-expiry time, priority, enqueue time, attempt count, and a global sequence number used to break FIFO ties across shards
+- `Lease` peeks every shard's best-by-*effective*-priority candidate (base priority minus wait-time-based aging, floored at `PriorityHigh`), picks the single globally best one tie-broken by enqueue order, and takes it from its shard — retrying if a concurrent `Lease` call won the same job first. This degenerates to exactly "first pending-or-lease-expired job, globally" when every job shares the same priority, which is always true for `main.go`
 - `Ack`/`Fail` validate the caller still holds the current lease before mutating state; releasing a lease (via `Fail` or expiry) routes through an attempt-exhaustion check that can move a job to the terminal `abandoned` state instead of back to `pending`
 - Time comes from the injected `Clock`, so the test harness can fast-forward past lease expiries without sleeping
-- The whole design is proven race-free under many concurrent callers via `go test -race ./...` (`solution/concurrency_test.go`)
+- The whole design is proven race-free under many concurrent callers via `go test -race ./...` (`solution/concurrency_test.go`) — no code path ever holds more than one shard's lock at a time
 
 ## Getting started
 
@@ -29,9 +30,11 @@ YODOQ ships with a test harness that runs three levels of escalating failure inj
 
 ## Architecture
 
-- **`solution.JobQueue`** (`solution/queue.go`): core type and operations — `New`, `Enqueue`, `Lease`, `Ack`, `Fail`, `Stats`
+- **`solution.JobQueue`** (`solution/queue.go`): core type and operations — `New`, `Enqueue`, `Lease`, `Ack`, `Fail`, `Stats`; routes each call to the right shard(s)
+- **`shard`** (`solution/shard.go`): one partition's mutex, job table, per-priority ready FIFOs, and expiry heap; `numShards`/`parseJobID` also live here
+- **`expiryHeap`** (`solution/expiry_heap.go`): `container/heap` min-heap of `*job` by `leaseExpiresAt`, used to reclaim expired leases without scanning
 - **`solution.EnqueueOption` / `solution.QueueOption`** (`solution/options.go`): functional options — `WithPriority`, `WithMaxAttempts` on `Enqueue`; `WithAgingIntervalMS` on `New`. All default to today's behavior when omitted
-- **Priority & aging** (`solution/priority.go`): `Priority` levels (`PriorityHigh` / `PriorityNormal` / `PriorityLow`) and the effective-priority/aging comparator `Lease` uses to pick the best eligible job
+- **Priority & aging** (`solution/priority.go`): `Priority` levels (`PriorityHigh` / `PriorityNormal` / `PriorityLow`) and the effective-priority/aging comparator `Lease` uses to pick the best eligible job across shards
 - **Attempt tracking & dedup** (`solution/dedup.go`): per-job attempt counting and the Leased→Pending/Abandoned decision made whenever a lease is released (expiry or `Fail`)
 - **`solution.Clock`**: abstraction over `time.Now()` so the harness can fast-forward
 - **`Worker`** (`main.go`): virtual job consumer that may crash mid-process or have its acks dropped
@@ -41,32 +44,33 @@ YODOQ ships with a test harness that runs three levels of escalating failure inj
 
 ```mermaid
 flowchart LR
-    subgraph JobQueue["solution.JobQueue (mutex-guarded)"]
-        O["order []string\n(FIFO insertion order)"]
-        M["jobs map[string]*job\nstate: pending | leased | completed | abandoned\npriority, enqueuedAt, attempts, maxAttempts"]
+    subgraph JobQueue["solution.JobQueue (thin router)"]
+        direction LR
+        S0["shard 0\nmutex + jobs map[int64]*job\nready FIFO per priority + expiryHeap"]
+        S1["shard 1 ..."]
+        SN["shard 15"]
     end
 
-    subgraph Helpers["pure helpers, called under the lock"]
+    subgraph Helpers["pure helpers, called under one shard's lock"]
         P["priority.go\neffectivePriority, betterCandidate\n(aging comparator)"]
         D["dedup.go\nrecordAttempt, releaseJob\n(attempt tracking / abandon)"]
     end
 
     C["Clock\n(Now)"] -.-> JobQueue
 
-    E["Enqueue(payload, opts...)\nWithPriority / WithMaxAttempts"] --> M
-    E --> O
+    E["Enqueue(payload, opts...)\nWithPriority / WithMaxAttempts\n(round-robin shard)"] --> S0
 
     W1["Worker"] -- "Lease(workerID, leaseMS)" --> JobQueue
-    JobQueue -- "scan order,\npick best eligible job" --> P
+    JobQueue -- "peek every shard's best,\npick global best, take it" --> P
     JobQueue -- "record attempt /\ncheck exhaustion" --> D
     JobQueue -- "LeasedJob{ID, Payload, LeaseExpiresAt}" --> W1
-    W1 -- "Ack(workerID, jobID)" --> JobQueue
+    W1 -- "Ack(workerID, jobID)\n(parseJobID -> shard)" --> JobQueue
     W1 -. "Fail(workerID, jobID)\nor crash → lease expires" .-> JobQueue
 
     JobQueue -- "re-lease on expiry\n(or Abandoned if maxAttempts exhausted)" --> W2["Worker (different one)"]
 ```
 
-`Lease` scans `order`, scores every job that is `pending` (or `leased` with an expired `leaseExpiresAt`) by its *effective* priority at `now` — base priority minus wait-time-based aging, floored at `PriorityHigh` — and hands out the best-scoring one, tie-breaking by insertion order. This is exactly today's "first eligible job" behavior whenever every job shares the same priority, so a crashed worker's job still becomes re-leasable without any explicit failure signal; a job that has exhausted its `WithMaxAttempts` cap is abandoned instead of re-leased.
+`Lease` reclaims each shard's expired leases, peeks (without popping) each shard's best-scoring ready job — by *effective* priority at `now` (base priority minus wait-time-based aging, floored at `PriorityHigh`) — picks the single globally best candidate across all shards, tie-broken by global enqueue order, and takes it from its owning shard (retrying if a concurrent `Lease` call won the race for that exact job). This is exactly today's "first eligible job, globally" behavior whenever every job shares the same priority, so a crashed worker's job still becomes re-leasable without any explicit failure signal; a job that has exhausted its `WithMaxAttempts` cap is abandoned instead of re-leased.
 
 ## Implementation Levels
 
