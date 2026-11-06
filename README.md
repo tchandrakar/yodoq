@@ -121,5 +121,19 @@ Once you have a working solution, consider:
 - **Fairness** — implemented: worker fairness holds by construction (job selection in `Lease` never reads `workerID`, only queue state and `now`); retry fairness is bounded by lease-TTL pacing plus the opt-in max-attempts cap above. Both are exercised together in `solution/fairness_test.go`.
 - **Concurrency** — implemented: the existing single-mutex design is proven race-free under many concurrent callers running `Enqueue`/`Lease`/`Ack`/`Fail`/`Stats` in `solution/concurrency_test.go` (`go test -race ./...`).
 - **Persistence**: how would you survive a queue-process restart? What's the minimum on-disk footprint?
-- **Observability**: surface the metrics that would actually help an operator debug a stuck queue
+- **Observability** — implemented: a non-invasive `observer.Queue` wrapper publishes one event per call outcome (plus inferred lease-reclaim events) to a bus, served live over WebSocket to a terminal UI and a browser dashboard, without any change to `solution/queue.go`. See "Live observability tools" below.
 - **Distributed, Kafka-like**: see [`docs/ai/kafka-comparison.md`](docs/ai/kafka-comparison.md) for what it would take to evolve this into a durable, partitioned, replicated log
+
+## Live observability tools
+
+A non-invasive observability layer sits beside `solution.JobQueue`, never inside it: `observer.Queue` (`observer/wrapper.go`) wraps a `*solution.JobQueue`, forwards every call unchanged, and publishes one `observer.Event` per call outcome (enqueue, lease granted, lease reclaimed after expiry, ack, fail, rejections, stats snapshots) to a bounded, non-blocking `observer.Bus` (`observer/bus.go`). Lease-reclaim is inferred purely from the wrapper's own call-sequence bookkeeping — `solution/queue.go` is untouched. Two binaries serve that event stream over one shared WebSocket protocol (`internal/wsserver`), and two independent clients consume it.
+
+Each piece runs independently; both UI clients need one of the two servers already running.
+
+- **`go run .`** — the original grading harness. Unaffected: same code path (now via `internal/harness`, extracted verbatim from `main.go`), same output.
+- **`go run ./cmd/playground`** — interactive server. REST API (`POST /api/jobs`, `POST`/`DELETE /api/workers/{id}`, `GET /api/stats`, `POST /api/scenarios`, `POST /api/scenarios/{id}/replay`) plus a live WebSocket feed at `ws://localhost:8080/ws` (flags: `-addr`, `-backlog`).
+- **`go run ./cmd/harness-replay`** — scripted replay. Runs the fixed Level 1/2/3 scenarios (identical literals/seeds to `go run .`) against a wrapped queue, serving the same protocol on `ws://localhost:8081/ws` (flags: `-addr`, `-backlog`, `-levels`, `-exit-after`).
+- **`go run ./cmd/tui -addr=ws://localhost:8080/ws`** — terminal dashboard (bubbletea/bubbles/lipgloss). Connects to either server above; shows a connection-status header, the latest `stats_snapshot` counts, and a scrollable, color-coded event feed (lease reclaims in amber, rejections in red, time-to-expiry on lease rows).
+- **`cd web && npm install && npm run dev`** — browser dashboard (React + TypeScript + Vite, its own `package.json`/toolchain, entirely separate from the Go module). Enter the server's `host:port` in the page (default `localhost:8080`) to connect; shows a stats strip with sparklines, an in-flight-leases table, and a filterable event feed.
+
+New dependencies (`github.com/gorilla/websocket`, `github.com/charmbracelet/{bubbletea,bubbles,lipgloss}`) are confined to `cmd/playground`, `cmd/harness-replay`, `cmd/tui`, and `internal/wsserver` — `solution/`, `internal/harness`, and the root `main` package stay dependency-free.
