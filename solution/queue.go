@@ -73,10 +73,10 @@ type job struct {
 // Internally, JobQueue partitions the job space across numShards
 // independent shards (see shard.go), each with its own mutex, one ready
 // FIFO per priority level in use, and its own expiry min-heap —
-// borrowing Kafka's partitioning idea to avoid a global lock and a linear
-// scan in Lease. A job's external ID encodes its shard and per-shard
-// offset ("job-<shardIdx>-<offset>"), so Ack/Fail can route straight to
-// the owning shard with no separate lookup structure.
+// avoiding a global lock and a linear scan in Lease. A job's external ID
+// encodes its shard and per-shard offset ("job-<shardIdx>-<offset>"), so
+// Ack/Fail can route straight to the owning shard with no separate
+// lookup structure.
 //
 // Lease still needs the globally best-by-effective-priority job (ties
 // broken by global enqueue order), not just "the first shard that has

@@ -19,7 +19,7 @@ func (c *regressionClock) Advance(deltaMS int64) { c.now += deltaMS }
 // enqueue/lease/ack, a completed job not being re-leasable, batch
 // enqueue/lease/ack, fail-then-release-to-another-worker, and stale-ack
 // rejection after lease expiry. This is the regression safety net for the
-// Kafka-inspired sharding redesign.
+// sharding redesign.
 func TestJobQueue_Level1Scenarios(t *testing.T) {
 	clock := &regressionClock{}
 	q := New(clock)

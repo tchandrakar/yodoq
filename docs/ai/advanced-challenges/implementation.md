@@ -76,7 +76,7 @@ mapped onto the code cleanly as proposed.
 
 - `Lease` remains an O(n) scan per call (unchanged from before this task,
   and explicitly out of scope per `architecture.md`'s "Alternatives
-  considered" — that's the paused Kafka-inspired redesign's concern, not
+  considered" — that's the paused sharded queue redesign's concern, not
   this one's).
 - The "exactly-once-ish" guarantee bounds *leases*, not *executions* — a
   worker that successfully processes a job but whose `Ack` is dropped still

@@ -7,15 +7,14 @@ _Status: Draft · Author: solution-architect · Date: 2026-11-06_
 This spec covers exactly three of the README's six "Advanced challenges":
 **Priorities**, **Fairness**, **Exactly-once-ish**. It targets `main` branch's
 current, simple, single-mutex `solution/queue.go` — not the paused
-`feat/kafka-inspired-redesign` branch. Design must bolt onto today's
+sharded-redesign branch. Design must bolt onto today's
 implementation and must not assume or require the sharded/paused redesign.
 
 ### Non-goals (explicit)
 
 - **Persistence** — out of scope. Contradicts the project's in-memory,
-  single-process constraint (see `docs/ai/kafka-comparison.md` §2.1, which
-  already establishes that durability requires a WAL/disk layer this
-  exercise deliberately doesn't have). Not designed here.
+  single-process constraint (durability would require a WAL/disk layer
+  this exercise deliberately doesn't have). Not designed here.
 - **Observability** — out of scope. That is the paused UI/event-bus effort.
   Not designed here.
 - **Concurrency** — judged already satisfied by the existing design:
@@ -24,12 +23,10 @@ implementation and must not assume or require the sharded/paused redesign.
   (`Enqueue`, `Lease`, `Ack`, `Fail`, `Stats` — see `solution/queue.go:69-166`).
   No method reads or writes queue state outside the lock. This is already
   correct for "many parallel callers," just not optimized for throughput
-  (that optimization is the paused Kafka-inspired redesign, a separate,
+  (that optimization is the paused sharded queue redesign, a separate,
   later decision). The only gap is **proof**: there is no test today that
   exercises concurrent callers under Go's race detector. FR-7 below closes
   that gap without changing any production code.
-- **Distributed/Kafka-like** — already covered by `docs/ai/kafka-comparison.md`;
-  not revisited here.
 
 ## 1. Functional requirements
 

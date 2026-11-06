@@ -552,7 +552,7 @@ sequenceDiagram
   `sync.Mutex`, independent of whatever locking `solution.JobQueue` uses
   internally (NFR-3) — this makes the wrapper correct under the
   playground's real concurrent goroutine workers regardless of which
-  internal design the kafka-inspired-redesign task lands on, since the
+  internal design the sharded queue redesign task lands on, since the
   wrapper never reaches into `JobQueue` internals.
 - **Determinism**: `cmd/harness-replay` uses `harness.TestClock` + seeded
   `*mrand.Rand` exactly as `main.go` does today (FR-3/FR-9) — same seed
@@ -620,7 +620,7 @@ sequenceDiagram
   `Dropped` counter in the WS handshake response/first frame, so both UIs
   can show a small "N events dropped" indicator instead of silently
   under-reporting.
-- **Risk 3 — the kafka-inspired-redesign task changes `JobQueue`'s
+- **Risk 3 — the sharded queue redesign task changes `JobQueue`'s
   internals in a way that breaks the lease-reclaim inference.** Not
   possible by construction: the inference only depends on the *public*
   return values of `Lease`/`Ack`/`Fail` and the wrapper's own call-sequence
@@ -692,7 +692,7 @@ sequenceDiagram
 - **D6 — Lease-reclaim inferred from wrapper-local call-sequence state, not
   from any `solution.JobQueue` internal.** Reason: required by NFR-1/FR-2;
   also makes the feature independent of the concurrently-evolving
-  kafka-inspired-redesign task (Risk 3). Consequence: the wrapper carries a
+  sharded queue redesign task (Risk 3). Consequence: the wrapper carries a
   small amount of its own state (`shadow` map) that is, in effect, a
   redundant shadow of `JobQueue`'s own state machine — accepted as the
   necessary cost of staying fully external.

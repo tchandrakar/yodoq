@@ -1,7 +1,7 @@
-# Implementation notes: Kafka-inspired internal redesign of JobQueue
+# Implementation notes: Sharded internal redesign of JobQueue
 
-Branch: `feat/kafka-inspired-redesign-v2` (see "Branch decision" below for why
-this is a new branch rather than the original `feat/kafka-inspired-redesign`).
+Branch: `feat/sharded-queue-redesign-v2` (see "Branch decision" below for why
+this is a new branch rather than the original `feat/sharded-queue-redesign`).
 
 ## What was built
 
@@ -56,8 +56,8 @@ comparable), since per-shard offsets aren't orderable against each other.
 
 ## Branch decision
 
-Recreated as `feat/kafka-inspired-redesign-v2` off current `main`, rather
-than rebasing the original `feat/kafka-inspired-redesign`. The original
+Recreated as `feat/sharded-queue-redesign-v2` off current `main`, rather
+than rebasing the original `feat/sharded-queue-redesign`. The original
 branch's T1-T4 commits were built against `main` as it stood *before* the
 advanced-challenges work (priority/aging/dedup/options) existed — a rebase
 would have replayed a full non-priority `queue.go` rewrite on top of a
@@ -65,7 +65,7 @@ would have replayed a full non-priority `queue.go` rewrite on top of a
 different effort. That's a worse starting point than just re-doing T1-T8
 directly against today's `queue.go`, which is what plan.md's status note
 and this file describe. The original branch's stashed T6 WIP (`shard.go`
-keyed by plain offsets, no priority) and its `docs/ai/kafka-inspired-redesign/`
+keyed by plain offsets, no priority) and its `docs/ai/sharded-queue-redesign/`
 docs were recovered from `git stash list`/the stash's untracked-files commit
 and used as the starting point for this branch's design, then adapted.
 

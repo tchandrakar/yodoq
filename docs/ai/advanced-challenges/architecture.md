@@ -6,7 +6,7 @@ _Status: Proposed · Date: 2026-11-06 · Spec: ./spec.md_
 This bolts three new behaviors onto `main`'s current, simple
 `solution/queue.go` (single `sync.Mutex`, `map[string]*job`, `order
 []string` FIFO scan in `Lease`). It intentionally does **not** touch,
-depend on, or reference the paused `feat/kafka-inspired-redesign` branch.
+depend on, or reference the paused `feat/sharded-queue-redesign` branch.
 Everything here is designed to also work, unmodified in its public
 surface, if that sharded redesign is adopted later — see "What this does
 NOT change" below.
@@ -72,7 +72,7 @@ flowchart LR
    aging-comparator approach needs no special case, the math just reduces
    to identical decay for every job; (c) today's `Lease` is already an
    O(n) scan with no secondary index, so avoiding a scan isn't a real
-   win at this project's scale — the paused Kafka-inspired redesign is the
+   win at this project's scale — the paused sharded queue redesign is the
    correct place to revisit `Lease`'s algorithmic complexity, not this task.
    Weighted round-robin remains a reasonable *future* choice if the aging
    constants ever prove hard to tune; noted as a fallback, not adopted now.
@@ -436,7 +436,7 @@ required).
   today's exact FIFO behavior for uniform-priority input (required for
   NFR-3) and needs no new container/lock. Consequence: `Lease` stays
   O(n); if throughput at scale ever matters, that's the paused
-  Kafka-inspired redesign's job, not this one — this design does not
+  sharded queue redesign's job, not this one — this design does not
   foreclose it.
 - **ADR-3: Dedup window = bounded re-lease count, opt-in, default
   unlimited.** Reason: the queue cannot observe execution, only leasing,
@@ -461,7 +461,7 @@ required).
 - The single global `sync.Mutex` concurrency model — this design adds
   fields to `job` and small pure helper functions; it does not introduce
   sharding, per-partition locks, or any concurrency-model change.
-  **Adopting the paused sharded/Kafka-inspired redesign is a separate,
+  **Adopting the paused sharded queue redesign is a separate,
   later decision** — everything here (priority comparator, attempt
   bookkeeping) is expressed as logic over a single `job` record and a
   selection function over "the set of currently eligible jobs," which

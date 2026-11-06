@@ -8,7 +8,7 @@ A small Go exercise: build a reliable job queue that doesn't lose work even when
 
 The reference solution in [`solution/`](solution/) is implemented and passes all three harness levels (`go run .`): zero jobs lost at every crash/ack-drop rate from 0% to 50%, with duplication bounded roughly linearly to the failure rate. It also implements the Concurrency, Priorities, Fairness, and Exactly-once-ish advanced challenges — see "Advanced challenges" below.
 
-It's a single-process, in-memory `JobQueue`, internally partitioned into `numShards` (16) independent shards (a Kafka-inspired internal redesign — see `docs/ai/kafka-inspired-redesign/`):
+It's a single-process, in-memory `JobQueue`, internally partitioned into `numShards` (16) independent shards (a sharded internal redesign — see `docs/ai/sharded-queue-redesign/`):
 
 - Each shard owns its own `sync.Mutex`, a `map[int64]*job` keyed by a per-shard offset, one ready FIFO per priority level in use, and a `container/heap` min-heap of currently-leased jobs ordered by lease expiry — no shard ever needs another shard's lock, and no operation scans every job
 - A job's external ID (`job-<shard>-<offset>`) encodes its shard, so `Ack`/`Fail` route straight to the owning shard
@@ -126,7 +126,6 @@ Once you have a working solution, consider:
 - **Concurrency** — implemented: the existing single-mutex design is proven race-free under many concurrent callers running `Enqueue`/`Lease`/`Ack`/`Fail`/`Stats` in `solution/concurrency_test.go` (`go test -race ./...`).
 - **Persistence**: how would you survive a queue-process restart? What's the minimum on-disk footprint?
 - **Observability** — implemented: a non-invasive `observer.Queue` wrapper publishes one event per call outcome (plus inferred lease-reclaim events) to a bus, served live over WebSocket to a terminal UI and a browser dashboard, without any change to `solution/queue.go`. See "Live observability tools" below.
-- **Distributed, Kafka-like**: see [`docs/ai/kafka-comparison.md`](docs/ai/kafka-comparison.md) for what it would take to evolve this into a durable, partitioned, replicated log
 
 ## Live observability tools
 

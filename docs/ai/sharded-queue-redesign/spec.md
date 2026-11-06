@@ -1,4 +1,4 @@
-# Spec: Kafka-inspired internal redesign of JobQueue
+# Spec: Sharded internal redesign of JobQueue
 
 _Status: Refined · Refined by: solution-architect · Date: 2026-11-06_
 
@@ -13,8 +13,8 @@ _Status: Refined · Refined by: solution-architect · Date: 2026-11-06_
 ## Goal
 
 Redesign the *internal* data structures and concurrency model of
-`solution.JobQueue` to borrow Kafka's good ideas (partitioning, log/offset
-addressing, avoiding linear scans, low lock contention) while keeping the
+`solution.JobQueue` — partitioning, log/offset-style addressing, avoiding
+linear scans, low lock contention — while keeping the
 queue's existing mutable lease/ack/fail semantics and its public Go API
 byte-for-byte identical, so `main.go` (unmodifiable) keeps passing all three
 levels with zero lost jobs and bounded duplication.
@@ -71,10 +71,9 @@ levels with zero lost jobs and bounded duplication.
 
 ## Non-goals (and why)
 
-- **Disk persistence / WAL** — out of scope per NFR-5; moved here from the
-  original Kafka-comparison roadmap because it requires a recovery/replay
-  path and fsync policy that this single-process exercise has no use for
-  and the harness never restarts the process mid-run.
+- **Disk persistence / WAL** — out of scope per NFR-5; it requires a
+  recovery/replay path and fsync policy that this single-process exercise
+  has no use for, and the harness never restarts the process mid-run.
 - **Network/client-server protocol, multiple broker processes,
   replication, Raft/consensus leader election** — out of scope; these
   change the public contract from "Go library" to "service," which

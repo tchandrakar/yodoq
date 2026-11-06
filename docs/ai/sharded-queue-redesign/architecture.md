@@ -1,4 +1,4 @@
-# Architecture: Kafka-inspired internal redesign of JobQueue
+# Architecture: Sharded internal redesign of JobQueue
 _Status: Proposed · Date: 2026-11-06 · Spec: ./spec.md_
 
 ## Context
@@ -41,8 +41,8 @@ shards plus the shared `Clock`.
 
 Job IDs encode their shard and a per-shard monotonic **offset**, e.g.
 `job-<shard>-<offset>` (still an opaque string to `main.go`, which never
-parses IDs — satisfies FR-2). This is the one deliberate Kafka borrowing
-that most changes the shape of the code: addressing a job by
+parses IDs — satisfies FR-2). This is the one deliberate choice that most
+changes the shape of the code: addressing a job by
 `(shard, offset)` instead of a flat string-keyed map means `Ack`/`Fail`
 can parse the shard straight out of the ID and go directly to the right
 shard's mutex and `map[int64]*job` (keyed by offset, not by string) — no
@@ -389,7 +389,7 @@ itself untouched (FR-1).
 ## Decisions
 
 - **D1 — Shard the queue (vs. single global FIFO+heap).** Reason: the
-  task brief explicitly asks us to evaluate Kafka-style partitioning, and
+  task brief explicitly asks us to evaluate partitioned sharding, and
   encoding `(shard, offset)` in the job ID makes shard dispatch O(1) with
   no extra lookup structure, which keeps the added complexity small
   relative to its educational/future-proofing value. Consequence: slightly

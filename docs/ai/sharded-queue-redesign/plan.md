@@ -1,5 +1,5 @@
-# Implementation plan: Kafka-inspired internal redesign of JobQueue
-Branch: feat/kafka-inspired-redesign-v2   Base: main (post advanced-challenges merge)
+# Implementation plan: Sharded internal redesign of JobQueue
+Branch: feat/sharded-queue-redesign-v2   Base: main (post advanced-challenges merge)
 
 Each step must leave `go build ./...`, `go vet ./...`, `gofmt -l .` (empty
 output), `go test ./...`, `go test -race ./...`, and `go run .` (all three
@@ -7,7 +7,7 @@ levels, zero lost jobs) green before moving to the next step. Do not
 change `main.go`.
 
 Status note (2026-11-06): T1-T5 were implemented on the original
-`feat/kafka-inspired-redesign` branch, off an old `main` that predated
+`feat/sharded-queue-redesign` branch, off an old `main` that predated
 priority/aging/dedup/options. That branch was paused mid-T6. This plan
 restarts clean on current `main` (which already has priority/aging/dedup/
 options) and re-does T1-T8, adapting T6-T8 so the sharded design carries

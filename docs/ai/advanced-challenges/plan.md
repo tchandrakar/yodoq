@@ -100,9 +100,8 @@ the aging comparator that everything else depends on) comes first.
   for Concurrency; `solution/priority.go` + `solution/queue.go`'s `Lease`
   for Priorities/Fairness; `solution/dedup.go` + `Stats.Abandoned` for
   Exactly-once-ish). Explicitly keep Persistence and Observability listed
-  as deferred: Persistence with a pointer to
-  `docs/ai/kafka-comparison.md` §2.1 (durability requires a WAL/disk
-  layer, contradicts the in-memory constraint); Observability noted as a
+  as deferred: Persistence noted as out of scope (durability requires a
+  WAL/disk layer, which contradicts the in-memory constraint); Observability noted as a
   separate, currently-paused UI/event-bus effort (no doc pointer needed
   beyond that note, since no observability doc exists yet). Files:
   `README.md`. Tests: none (docs-only); `gofmt -l .`/`go vet ./...`
