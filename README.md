@@ -4,6 +4,18 @@ Welcome to **Y**our **O**wn **D**on't-**D**rop **Q**ueue.
 
 A small Go exercise: build a reliable job queue that doesn't lose work even when workers crash and acks vanish in transit. It doesn't compete with Sidekiq or Temporal — it's your own.
 
+## Status
+
+The reference solution in [`solution/queue.go`](solution/queue.go) is implemented and passes all three harness levels (`go run .`): zero jobs lost at every crash/ack-drop rate from 0% to 50%, with duplication bounded roughly linearly to the failure rate.
+
+It's a single-process, in-memory `JobQueue`:
+
+- A `sync.Mutex`-guarded `map[string]*job` plus an `order []string` slice for FIFO insertion-order scanning
+- Each job tracks state (`pending` / `leased` / `completed`), its current lease holder, and lease-expiry time
+- `Lease` scans `order` for the first pending-or-lease-expired job and assigns it to the caller until `clock.Now() + leaseMS`
+- `Ack`/`Fail` validate the caller still holds the current lease before mutating state
+- Time comes from the injected `Clock`, so the test harness can fast-forward past lease expiries without sleeping
+
 ## Getting started
 
 You will implement a single-process, in-memory job queue with the following guarantees:
@@ -22,6 +34,28 @@ YODOQ ships with a test harness that runs three levels of escalating failure inj
 - **`FailureSimulator`** (`main.go`): parameterizes crash and ack-drop rates
 - **`ExecutionLedger`** (`main.go`): out-of-band ground truth of how many times each job *actually* ran — the harness's source of truth for grading
 - **`TestHarness`** (`main.go`): three levels of tests
+
+```mermaid
+flowchart LR
+    subgraph JobQueue["solution.JobQueue (mutex-guarded)"]
+        O["order []string\n(FIFO insertion order)"]
+        M["jobs map[string]*job\nstate: pending | leased | completed\nleaseWorker, leaseExpiresAt"]
+    end
+
+    C["Clock\n(Now)"] -.-> JobQueue
+
+    E["Enqueue(payload)"] --> M
+    E --> O
+
+    W1["Worker"] -- "Lease(workerID, leaseMS)" --> JobQueue
+    JobQueue -- "LeasedJob{ID, Payload, LeaseExpiresAt}" --> W1
+    W1 -- "Ack(workerID, jobID)" --> JobQueue
+    W1 -. "Fail(workerID, jobID)\nor crash → lease expires" .-> JobQueue
+
+    JobQueue -- "re-lease on expiry" --> W2["Worker (different one)"]
+```
+
+Lease scans `order` for the first job that is `pending`, or `leased` with an expired `leaseExpiresAt`, and hands it to the caller — so a crashed worker's job becomes re-leasable without any explicit failure signal.
 
 ## Implementation Levels
 
@@ -77,3 +111,4 @@ Once you have a working solution, consider:
 - **Concurrency**: make the queue safe for many parallel callers
 - **Persistence**: how would you survive a queue-process restart? What's the minimum on-disk footprint?
 - **Observability**: surface the metrics that would actually help an operator debug a stuck queue
+- **Distributed, Kafka-like**: see [`docs/ai/kafka-comparison.md`](docs/ai/kafka-comparison.md) for what it would take to evolve this into a durable, partitioned, replicated log
