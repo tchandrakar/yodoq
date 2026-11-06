@@ -30,6 +30,18 @@ type TestClock struct{ now int64 }
 func (c *TestClock) Now() int64            { return c.now }
 func (c *TestClock) Advance(deltaMS int64) { c.now += deltaMS }
 
+// SimClock is what a Worker needs from its time source: solution.Clock's
+// Now() plus the ability to advance it by a simulated processing delay.
+// *TestClock satisfies this (fast-forwarded fake time, used by the fixed
+// levels and scenario replays). A wall-clock-backed implementation whose
+// Advance is a no-op (time passes on its own) satisfies it too, which is
+// what lets cmd/playground's interactive, real-time simulated workers reuse
+// this same Worker/Tick logic instead of a second copy of it.
+type SimClock interface {
+	Now() int64
+	Advance(deltaMS int64)
+}
+
 // ExecutionLedger is the harness's out-of-band ground truth: how many times
 // did each job's processing function actually run? This is independent of
 // what the queue thinks, and is the basis for grading.
@@ -82,7 +94,7 @@ func (f *FailureSimulator) ShouldDropAck() bool { return f.Rng.Float64() < f.Ack
 type Worker struct {
 	ID       string
 	Queue    Queue
-	Clock    *TestClock
+	Clock    SimClock
 	Ledger   *ExecutionLedger
 	Failures *FailureSimulator
 	LeaseMS  int64
