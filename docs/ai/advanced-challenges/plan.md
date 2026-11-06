@@ -6,7 +6,7 @@ output), `go test ./...`, and `go run .` all green before moving to the
 next step. Risky/foundational work (the regression-proof race test, then
 the aging comparator that everything else depends on) comes first.
 
-- [ ] T1 Add a concurrency/race test proving the existing single-mutex
+- [x] T1 Add a concurrency/race test proving the existing single-mutex
   design already satisfies the Concurrency challenge — no production code
   change. Files: `solution/concurrency_test.go` (new). Tests: `go test
   -race ./solution/...` with many goroutines calling `Enqueue`/`Lease`/
@@ -14,7 +14,7 @@ the aging comparator that everything else depends on) comes first.
   `Stats()` counts reconcile (every enqueued job ends up accounted for,
   no panic/race). Covers: FR-7.
 
-- [ ] T2 Introduce the `EnqueueOption` surface (no behavior change yet —
+- [x] T2 Introduce the `EnqueueOption` surface (no behavior change yet —
   `Enqueue`'s new `opts ...EnqueueOption` parameter is accepted but not
   yet acted on beyond storing defaults). Files: `solution/options.go`
   (new: `EnqueueOption`, `enqueueOptions`, `WithPriority`,
@@ -27,7 +27,7 @@ the aging comparator that everything else depends on) comes first.
   (`PriorityNormal`, unlimited attempts) when no opts are passed. Covers:
   FR-1, FR-2 (partial — types defined), FR-9 (partial — option defined).
 
-- [ ] T3 Implement priority levels + the aging comparator and wire it into
+- [x] T3 Implement priority levels + the aging comparator and wire it into
   `Lease`'s selection. Files: `solution/priority.go` (new: `Priority`
   consts, `agingIntervalMS`, `effectivePriority`, `candidate`,
   `betterCandidate`); `solution/queue.go` (`Lease`'s loop now folds every
@@ -40,7 +40,7 @@ the aging comparator that everything else depends on) comes first.
   documented bound (`2 * agingIntervalMS`). Covers: FR-2, FR-3, FR-4,
   FR-5 (implicitly — selection still ignores `workerID`), NFR-3, NFR-5.
 
-- [ ] T4 Implement the max-attempts / dedup-window mechanism. Files:
+- [x] T4 Implement the max-attempts / dedup-window mechanism. Files:
   `solution/dedup.go` (new: `recordAttempt`, `releaseJob`);
   `solution/queue.go` (`stateAbandoned` added to `jobState`; `Lease`
   calls `recordAttempt` when assigning a lease; the Leased→Pending
@@ -56,7 +56,7 @@ the aging comparator that everything else depends on) comes first.
   error type). Covers: FR-8 (doc comments added alongside), FR-9, FR-10,
   FR-11, NFR-3.
 
-- [ ] T5 Memory-cost documentation for the attempt-tracking fields —
+- [x] T5 Memory-cost documentation for the attempt-tracking fields —
   no behavior change. Files: doc comments in `solution/dedup.go` and/or
   `solution/queue.go` on the `job` struct, stating the ~32 bytes/job
   overhead (4 extra machine words) and that it's unconditional (present
@@ -67,7 +67,7 @@ the aging comparator that everything else depends on) comes first.
   if a benchmark is added, `go test -bench=. ./solution/...` runs
   without failing. Covers: FR-12.
 
-- [ ] T6 Fairness integration test combining priorities + sustained load
+- [x] T6 Fairness integration test combining priorities + sustained load
   across multiple simulated workers, to validate FR-3/FR-5/FR-6 together
   under something closer to the real harness shape (not just isolated
   unit tests). Files: `solution/fairness_test.go` (new) — N fake workers
@@ -84,7 +84,7 @@ the aging comparator that everything else depends on) comes first.
   (as an integration-level demonstration of the "argued, not built"
   rationale), FR-7 (incidentally, by running under `-race`).
 
-- [ ] T7 Full-repo regression pass: run `go run .` and confirm Level 1,
+- [x] T7 Full-repo regression pass: run `go run .` and confirm Level 1,
   2, and 3 output is unchanged (zero jobs lost at every rate, duplication
   bounded as before) now that `main.go`'s unmodified call sites exercise
   the new default-priority/unlimited-attempts code paths. Files: none
@@ -94,7 +94,7 @@ the aging comparator that everything else depends on) comes first.
   1/2/3 pass/fail/warn lines), `go test ./...`, `go vet ./...`,
   `gofmt -l .`. Covers: NFR-1, NFR-3.
 
-- [ ] T8 Update `README.md`'s "Advanced challenges" section: mark
+- [x] T8 Update `README.md`'s "Advanced challenges" section: mark
   Concurrency, Priorities, Fairness, and Exactly-once-ish as implemented,
   each with a one-line pointer to where (`solution/concurrency_test.go`
   for Concurrency; `solution/priority.go` + `solution/queue.go`'s `Lease`
