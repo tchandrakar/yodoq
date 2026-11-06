@@ -1,4 +1,7 @@
 /yodoq
+/playground
+/harness-replay
+/tui
 *.test
 *.out
 .DS_Store
