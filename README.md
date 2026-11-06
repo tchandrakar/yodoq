@@ -95,12 +95,54 @@ flowchart LR
 ## Prerequisites
 
 - Go 1.22+
+- Node.js 18+ and npm (only needed for the browser dashboard, step 5 below)
 
-## Running the tests
+## Running it, step by step
 
-```bash
-go run .
-```
+1. **Run the core queue + grading harness** (no extra setup needed):
+   ```bash
+   go run .
+   ```
+   This is `main.go` running the fixed Level 1/2/3 scenarios against `solution.JobQueue` directly and printing pass/fail text — the same thing it's always done.
+
+2. **Run the test suite**, including the concurrency/race checks:
+   ```bash
+   go test -race ./...
+   ```
+
+3. **Start the interactive playground server** in one terminal and leave it running:
+   ```bash
+   go run ./cmd/playground
+   ```
+   By default it listens on `:8080` and logs its endpoints: `POST /api/jobs` (enqueue), `POST /api/workers` / `DELETE /api/workers/{id}` (start/stop a simulated worker), `GET /api/stats`, `POST /api/scenarios` (run a scripted scenario), and a live event feed over WebSocket at `ws://localhost:8080/ws`.
+
+4. **Push some jobs and workers at it** from another terminal, e.g.:
+   ```bash
+   curl -X POST localhost:8080/api/jobs -d '{"payload":"hello"}'
+   curl -X POST localhost:8080/api/workers -d '{"id":"worker-1","crashRate":0.2,"ackDropRate":0.1}'
+   curl -X POST localhost:8080/api/scenarios -d '{"name":"demo","jobCount":200,"workerCount":5,"leaseMs":1000,"processingTimeMs":100,"crashRate":0.2,"ackDropRate":0.1}'
+   ```
+
+5. **Watch it live in a browser**, in another terminal:
+   ```bash
+   cd web
+   npm install
+   npm run dev
+   ```
+   Open the URL Vite prints (usually `http://localhost:5173`), enter the playground server's address (`localhost:8080`), and connect — you'll see a live stats strip, an in-flight-leases table, and a filterable event feed updating as jobs move through the queue.
+
+6. **Or watch it from the terminal instead**, pointed at the same running server:
+   ```bash
+   go run ./cmd/tui -addr=ws://localhost:8080/ws
+   ```
+
+7. **Replay the fixed grading scenarios live** (same behavior as `go run .`, but streamed over the same protocol as steps 5/6, so either UI can watch it):
+   ```bash
+   go run ./cmd/harness-replay
+   ```
+   It serves on `ws://localhost:8081/ws` by default — connect the web dashboard or TUI to that address instead of `:8080`.
+
+Each piece is independent: the web dashboard and TUI are both just WebSocket clients, so either one works against either server (`cmd/playground` or `cmd/harness-replay`), and neither server nor UI is required to run `go run .` or `go test ./...`.
 
 ## Test results — what to look at
 
