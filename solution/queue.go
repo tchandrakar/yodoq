@@ -40,6 +40,11 @@ type job struct {
 	state          jobState
 	leaseWorker    string
 	leaseExpiresAt int64
+
+	priority    Priority // set at Enqueue time; PriorityNormal by default
+	enqueuedAt  int64    // ms, from clock.Now() at Enqueue time; used for aging
+	attempts    int      // count of leases handed out so far
+	maxAttempts int      // 0 = unlimited (today's behavior)
 }
 
 // JobQueue is what you implement.
@@ -50,6 +55,7 @@ type job struct {
 //  3. Bounded duplication under crash + dropped-ack rates of 0.1% to 50%
 type JobQueue struct {
 	clock Clock
+	opts  queueOptions
 
 	mu     sync.Mutex
 	jobs   map[string]*job
@@ -57,25 +63,35 @@ type JobQueue struct {
 	nextID int64
 }
 
-// New constructs an empty queue using the given clock.
-func New(clock Clock) *JobQueue {
+// New constructs an empty queue using the given clock. Options are optional;
+// New(clock) (no opts) keeps today's behavior exactly (aging interval
+// defaults to defaultAgingIntervalMS).
+func New(clock Clock, opts ...QueueOption) *JobQueue {
 	return &JobQueue{
 		clock: clock,
+		opts:  resolveQueueOptions(opts...),
 		jobs:  make(map[string]*job),
 	}
 }
 
 // Enqueue stores a new job for processing and returns its unique ID.
-func (q *JobQueue) Enqueue(payload []byte) (string, error) {
+// opts is optional; q.Enqueue(payload) (zero opts) keeps today's behavior
+// exactly (PriorityNormal, unlimited attempts).
+func (q *JobQueue) Enqueue(payload []byte, opts ...EnqueueOption) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	resolved := resolveOptions(opts...)
 
 	q.nextID++
 	id := fmt.Sprintf("job-%d", q.nextID)
 	q.jobs[id] = &job{
-		id:      id,
-		payload: payload,
-		state:   statePending,
+		id:          id,
+		payload:     payload,
+		state:       statePending,
+		priority:    resolved.priority,
+		enqueuedAt:  q.clock.Now(),
+		maxAttempts: resolved.maxAttempts,
 	}
 	q.order = append(q.order, id)
 	return id, nil
