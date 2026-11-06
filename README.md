@@ -6,15 +6,16 @@ A small Go exercise: build a reliable job queue that doesn't lose work even when
 
 ## Status
 
-The reference solution in [`solution/queue.go`](solution/queue.go) is implemented and passes all three harness levels (`go run .`): zero jobs lost at every crash/ack-drop rate from 0% to 50%, with duplication bounded roughly linearly to the failure rate.
+The reference solution in [`solution/`](solution/) is implemented and passes all three harness levels (`go run .`): zero jobs lost at every crash/ack-drop rate from 0% to 50%, with duplication bounded roughly linearly to the failure rate. It also implements the Concurrency, Priorities, Fairness, and Exactly-once-ish advanced challenges — see "Advanced challenges" below.
 
 It's a single-process, in-memory `JobQueue`:
 
 - A `sync.Mutex`-guarded `map[string]*job` plus an `order []string` slice for FIFO insertion-order scanning
-- Each job tracks state (`pending` / `leased` / `completed`), its current lease holder, and lease-expiry time
-- `Lease` scans `order` for the first pending-or-lease-expired job and assigns it to the caller until `clock.Now() + leaseMS`
-- `Ack`/`Fail` validate the caller still holds the current lease before mutating state
+- Each job tracks state (`pending` / `leased` / `completed` / `abandoned`), its current lease holder, lease-expiry time, priority, enqueue time, and attempt count
+- `Lease` scans `order` and picks the best eligible job by *effective* priority (base priority minus wait-time-based aging, floored at `PriorityHigh`), tie-breaking by insertion order — this degenerates to exactly "first pending-or-lease-expired job" when every job shares the same priority, which is always true for `main.go`
+- `Ack`/`Fail` validate the caller still holds the current lease before mutating state; releasing a lease (via `Fail` or expiry) routes through an attempt-exhaustion check that can move a job to the terminal `abandoned` state instead of back to `pending`
 - Time comes from the injected `Clock`, so the test harness can fast-forward past lease expiries without sleeping
+- The whole design is proven race-free under many concurrent callers via `go test -race ./...` (`solution/concurrency_test.go`)
 
 ## Getting started
 
@@ -28,7 +29,10 @@ YODOQ ships with a test harness that runs three levels of escalating failure inj
 
 ## Architecture
 
-- **`solution.JobQueue`** (`solution/queue.go`): your implementation lives here
+- **`solution.JobQueue`** (`solution/queue.go`): core type and operations — `New`, `Enqueue`, `Lease`, `Ack`, `Fail`, `Stats`
+- **`solution.EnqueueOption` / `solution.QueueOption`** (`solution/options.go`): functional options — `WithPriority`, `WithMaxAttempts` on `Enqueue`; `WithAgingIntervalMS` on `New`. All default to today's behavior when omitted
+- **Priority & aging** (`solution/priority.go`): `Priority` levels (`PriorityHigh` / `PriorityNormal` / `PriorityLow`) and the effective-priority/aging comparator `Lease` uses to pick the best eligible job
+- **Attempt tracking & dedup** (`solution/dedup.go`): per-job attempt counting and the Leased→Pending/Abandoned decision made whenever a lease is released (expiry or `Fail`)
 - **`solution.Clock`**: abstraction over `time.Now()` so the harness can fast-forward
 - **`Worker`** (`main.go`): virtual job consumer that may crash mid-process or have its acks dropped
 - **`FailureSimulator`** (`main.go`): parameterizes crash and ack-drop rates
@@ -39,23 +43,30 @@ YODOQ ships with a test harness that runs three levels of escalating failure inj
 flowchart LR
     subgraph JobQueue["solution.JobQueue (mutex-guarded)"]
         O["order []string\n(FIFO insertion order)"]
-        M["jobs map[string]*job\nstate: pending | leased | completed\nleaseWorker, leaseExpiresAt"]
+        M["jobs map[string]*job\nstate: pending | leased | completed | abandoned\npriority, enqueuedAt, attempts, maxAttempts"]
+    end
+
+    subgraph Helpers["pure helpers, called under the lock"]
+        P["priority.go\neffectivePriority, betterCandidate\n(aging comparator)"]
+        D["dedup.go\nrecordAttempt, releaseJob\n(attempt tracking / abandon)"]
     end
 
     C["Clock\n(Now)"] -.-> JobQueue
 
-    E["Enqueue(payload)"] --> M
+    E["Enqueue(payload, opts...)\nWithPriority / WithMaxAttempts"] --> M
     E --> O
 
     W1["Worker"] -- "Lease(workerID, leaseMS)" --> JobQueue
+    JobQueue -- "scan order,\npick best eligible job" --> P
+    JobQueue -- "record attempt /\ncheck exhaustion" --> D
     JobQueue -- "LeasedJob{ID, Payload, LeaseExpiresAt}" --> W1
     W1 -- "Ack(workerID, jobID)" --> JobQueue
     W1 -. "Fail(workerID, jobID)\nor crash → lease expires" .-> JobQueue
 
-    JobQueue -- "re-lease on expiry" --> W2["Worker (different one)"]
+    JobQueue -- "re-lease on expiry\n(or Abandoned if maxAttempts exhausted)" --> W2["Worker (different one)"]
 ```
 
-Lease scans `order` for the first job that is `pending`, or `leased` with an expired `leaseExpiresAt`, and hands it to the caller — so a crashed worker's job becomes re-leasable without any explicit failure signal.
+`Lease` scans `order`, scores every job that is `pending` (or `leased` with an expired `leaseExpiresAt`) by its *effective* priority at `now` — base priority minus wait-time-based aging, floored at `PriorityHigh` — and hands out the best-scoring one, tie-breaking by insertion order. This is exactly today's "first eligible job" behavior whenever every job shares the same priority, so a crashed worker's job still becomes re-leasable without any explicit failure signal; a job that has exhausted its `WithMaxAttempts` cap is abandoned instead of re-leased.
 
 ## Implementation Levels
 
@@ -105,10 +116,10 @@ go run .
 
 Once you have a working solution, consider:
 
-- **Exactly-once-ish**: introduce a dedup window so a single job can never run more than `K` times even under arbitrary failures. What's the trade-off in memory?
-- **Priorities**: support priority levels without starvation
-- **Fairness**: ensure no worker starves and no single job hogs retries
-- **Concurrency**: make the queue safe for many parallel callers
+- **Exactly-once-ish** — implemented: `WithMaxAttempts(k)` on `Enqueue` bounds how many times a job can be (re-)leased; once the `k`-th lease is given up without an intervening `Ack`, the job moves to a new terminal `Abandoned` state instead of back to `Pending`, surfaced via `Stats().Abandoned`. This bounds *leases*, not *executions* — the honest guarantee the queue can actually make. See `solution/dedup.go` and `solution/options.go`.
+- **Priorities** — implemented: `WithPriority(p)` on `Enqueue` sets one of `PriorityHigh` / `PriorityNormal` / `PriorityLow`; `Lease` picks the best eligible job by *effective* priority, which ages toward `PriorityHigh` the longer a job waits (configurable via `WithAgingIntervalMS` on `New`), bounding worst-case starvation for low-priority jobs. See `solution/priority.go` and `Lease` in `solution/queue.go`.
+- **Fairness** — implemented: worker fairness holds by construction (job selection in `Lease` never reads `workerID`, only queue state and `now`); retry fairness is bounded by lease-TTL pacing plus the opt-in max-attempts cap above. Both are exercised together in `solution/fairness_test.go`.
+- **Concurrency** — implemented: the existing single-mutex design is proven race-free under many concurrent callers running `Enqueue`/`Lease`/`Ack`/`Fail`/`Stats` in `solution/concurrency_test.go` (`go test -race ./...`).
 - **Persistence**: how would you survive a queue-process restart? What's the minimum on-disk footprint?
 - **Observability**: surface the metrics that would actually help an operator debug a stuck queue
 - **Distributed, Kafka-like**: see [`docs/ai/kafka-comparison.md`](docs/ai/kafka-comparison.md) for what it would take to evolve this into a durable, partitioned, replicated log
