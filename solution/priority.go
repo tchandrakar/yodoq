@@ -29,20 +29,25 @@ func effectivePriority(basePriority Priority, enqueuedAt, now, agingIntervalMS i
 	return int(score)
 }
 
-// candidate is one eligible job's standing in Lease's selection scan.
+// candidate is one eligible job's standing in Lease's selection, now
+// compared across shards (see shard.go's peekBest and queue.go's Lease)
+// rather than within a single global scan. seq is the job's global
+// enqueue sequence number (assigned by JobQueue.Enqueue via an atomic
+// counter), which replaces the old single-slice order-index as the FIFO
+// tie-break now that jobs are partitioned across per-shard offsets that
+// aren't comparable to each other for ordering purposes.
 type candidate struct {
-	jobID             string
-	orderIdx          int
+	seq               int64
 	effectivePriority int
 }
 
 // betterCandidate reports whether candidate c should replace best (best may
 // be nil, meaning "no candidate yet"). Lower effectivePriority wins; ties
-// are broken by earlier insertion index (orderIdx), which is what makes this
-// degenerate to today's exact "first eligible job in order" behavior
+// are broken by earlier global sequence number (seq), which is what makes
+// this degenerate to today's exact "first eligible job in order" behavior
 // whenever every job shares the same effective priority (always true for
 // main.go, which never sets a priority and never waits long enough to
-// matter within one Lease scan).
+// matter within one Lease call).
 func betterCandidate(best *candidate, c candidate) bool {
 	if best == nil {
 		return true
@@ -50,5 +55,5 @@ func betterCandidate(best *candidate, c candidate) bool {
 	if c.effectivePriority != best.effectivePriority {
 		return c.effectivePriority < best.effectivePriority
 	}
-	return c.orderIdx < best.orderIdx
+	return c.seq < best.seq
 }

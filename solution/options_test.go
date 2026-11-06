@@ -59,7 +59,10 @@ func TestNewWithNoOptsMatchesDefaultBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
-	j := q.jobs[id]
+	j, ok := q.lookupJob(id)
+	if !ok {
+		t.Fatalf("lookupJob(%q) not found", id)
+	}
 	if j.priority != PriorityNormal {
 		t.Errorf("job priority = %v, want PriorityNormal", j.priority)
 	}
