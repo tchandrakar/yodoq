@@ -154,7 +154,7 @@ func TestFairnessUnderSustainedHighLoadAndCappedJobs(t *testing.T) {
 		t.Errorf("Stats().Abandoned = %d, want %d", s.Abandoned, numCappedJobs)
 	}
 	for id := range cappedIDs {
-		if j, ok := q.jobs[id]; ok {
+		if j, ok := q.lookupJob(id); ok {
 			if j.state != stateAbandoned {
 				t.Errorf("capped job %s state = %v, want stateAbandoned", id, j.state)
 			}
