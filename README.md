@@ -99,6 +99,8 @@ flowchart LR
 
 ## Running it, step by step
 
+🎥 **[Watch a short demo](docs/media/playground-demo.mp4)** of the playground server and web dashboard running live — jobs enqueued, simulated workers crashing/dropping acks, lease reclaims highlighted in amber, live filtering, and zero jobs lost/abandoned at the end. Click the link, GitHub plays it inline.
+
 1. **Run the core queue + grading harness** (no extra setup needed):
    ```bash
    go run .
