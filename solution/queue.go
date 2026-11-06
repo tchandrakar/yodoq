@@ -104,7 +104,13 @@ func (q *JobQueue) Lease(workerID string, leaseMS int64) (*LeasedJob, error) {
 	defer q.mu.Unlock()
 
 	now := q.clock.Now()
-	for _, id := range q.order {
+
+	// Scan all eligible jobs and keep the best candidate by effective
+	// priority (ties broken by insertion order), rather than returning the
+	// first eligible match. Selection depends only on queue state and now —
+	// never on workerID — so no caller is systematically favored (FR-5).
+	var best *candidate
+	for idx, id := range q.order {
 		j := q.jobs[id]
 		if j.state == stateCompleted {
 			continue
@@ -113,16 +119,28 @@ func (q *JobQueue) Lease(workerID string, leaseMS int64) (*LeasedJob, error) {
 			continue
 		}
 
-		j.state = stateLeased
-		j.leaseWorker = workerID
-		j.leaseExpiresAt = now + leaseMS
-		return &LeasedJob{
-			ID:             j.id,
-			Payload:        j.payload,
-			LeaseExpiresAt: j.leaseExpiresAt,
-		}, nil
+		c := candidate{
+			jobID:             id,
+			orderIdx:          idx,
+			effectivePriority: effectivePriority(j.priority, j.enqueuedAt, now, q.opts.agingIntervalMS),
+		}
+		if betterCandidate(best, c) {
+			best = &c
+		}
 	}
-	return nil, nil
+	if best == nil {
+		return nil, nil
+	}
+
+	j := q.jobs[best.jobID]
+	j.state = stateLeased
+	j.leaseWorker = workerID
+	j.leaseExpiresAt = now + leaseMS
+	return &LeasedJob{
+		ID:             j.id,
+		Payload:        j.payload,
+		LeaseExpiresAt: j.leaseExpiresAt,
+	}, nil
 }
 
 // Ack marks a job as completed. Should return an error if `workerID` is not

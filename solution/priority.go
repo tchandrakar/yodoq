@@ -8,3 +8,47 @@ const (
 	PriorityNormal Priority = 1
 	PriorityLow    Priority = 2
 )
+
+// effectivePriority returns a job's priority score as of now, after aging:
+// every agingIntervalMS of wait time (now - enqueuedAt) reduces the score by
+// 1 (i.e. makes it more urgent), floored at PriorityHigh. Lower is more
+// urgent, matching the Priority constants above. agingIntervalMS is a
+// per-queue, configurable value (see WithAgingIntervalMS in options.go), not
+// a package-level constant, so this is a pure function of its inputs only —
+// it never reads time.Now() or any queue-wide state.
+func effectivePriority(basePriority Priority, enqueuedAt, now, agingIntervalMS int64) int {
+	waited := now - enqueuedAt
+	if waited <= 0 || agingIntervalMS <= 0 {
+		return int(basePriority)
+	}
+	steps := waited / agingIntervalMS
+	score := int64(basePriority) - steps
+	if score < int64(PriorityHigh) {
+		score = int64(PriorityHigh)
+	}
+	return int(score)
+}
+
+// candidate is one eligible job's standing in Lease's selection scan.
+type candidate struct {
+	jobID             string
+	orderIdx          int
+	effectivePriority int
+}
+
+// betterCandidate reports whether candidate c should replace best (best may
+// be nil, meaning "no candidate yet"). Lower effectivePriority wins; ties
+// are broken by earlier insertion index (orderIdx), which is what makes this
+// degenerate to today's exact "first eligible job in order" behavior
+// whenever every job shares the same effective priority (always true for
+// main.go, which never sets a priority and never waits long enough to
+// matter within one Lease scan).
+func betterCandidate(best *candidate, c candidate) bool {
+	if best == nil {
+		return true
+	}
+	if c.effectivePriority != best.effectivePriority {
+		return c.effectivePriority < best.effectivePriority
+	}
+	return c.orderIdx < best.orderIdx
+}
