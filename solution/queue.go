@@ -24,6 +24,7 @@ type Stats struct {
 	Pending   int // never leased, or failed and waiting
 	Leased    int // currently held by a worker (may have expired)
 	Completed int // acked successfully
+	Abandoned int // exhausted its WithMaxAttempts cap; never leased again
 }
 
 type jobState int
@@ -32,8 +33,18 @@ const (
 	statePending jobState = iota
 	stateLeased
 	stateCompleted
+	stateAbandoned
 )
 
+// job's priority/enqueuedAt/attempts/maxAttempts fields (added for the
+// Priorities and Exactly-once-ish advanced challenges) cost ~32 bytes
+// (4 extra machine words on a 64-bit platform) per in-flight job,
+// unconditionally — present whether or not WithPriority/WithMaxAttempts are
+// ever used, since Go has no cheap "optional field." At 1,000,000
+// concurrently in-flight jobs (far beyond this project's harness, which
+// runs 200 jobs per level), that's ~32MB of extra RAM — negligible next to
+// typical job payload sizes, and zero *additional* allocations (the fields
+// live inline in the existing job struct already pointed to from q.jobs).
 type job struct {
 	id             string
 	payload        []byte
@@ -112,11 +123,21 @@ func (q *JobQueue) Lease(workerID string, leaseMS int64) (*LeasedJob, error) {
 	var best *candidate
 	for idx, id := range q.order {
 		j := q.jobs[id]
-		if j.state == stateCompleted {
+		if j.state == stateCompleted || j.state == stateAbandoned {
 			continue
 		}
-		if j.state == stateLeased && j.leaseExpiresAt > now {
-			continue
+		if j.state == stateLeased {
+			if j.leaseExpiresAt > now {
+				continue // still held, not yet expired
+			}
+			// Lease expired without an Ack/Fail (crash recovery). Decide,
+			// via dedup.releaseJob, whether this job may still be retried
+			// or has exhausted maxAttempts.
+			if releaseJob(j) == stateAbandoned {
+				j.state = stateAbandoned
+				j.leaseWorker = ""
+				continue
+			}
 		}
 
 		c := candidate{
@@ -133,6 +154,7 @@ func (q *JobQueue) Lease(workerID string, leaseMS int64) (*LeasedJob, error) {
 	}
 
 	j := q.jobs[best.jobID]
+	recordAttempt(j)
 	j.state = stateLeased
 	j.leaseWorker = workerID
 	j.leaseExpiresAt = now + leaseMS
@@ -174,7 +196,7 @@ func (q *JobQueue) Fail(workerID, jobID string) error {
 	if j.state != stateLeased || j.leaseWorker != workerID {
 		return errors.New("worker does not hold the current lease for this job")
 	}
-	j.state = statePending
+	j.state = releaseJob(j)
 	j.leaseWorker = ""
 	j.leaseExpiresAt = 0
 	return nil
@@ -194,6 +216,8 @@ func (q *JobQueue) Stats() Stats {
 			s.Leased++
 		case stateCompleted:
 			s.Completed++
+		case stateAbandoned:
+			s.Abandoned++
 		}
 	}
 	return s
