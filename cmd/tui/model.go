@@ -21,13 +21,21 @@ var (
 	statusClosed = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	reclaimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	expiryGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	expiryAmber  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	expiryRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 )
+
+// expiryAmberThresholdMS is how close (in simulated ms) a lease must be to
+// its expiry before its row is shown in amber rather than green.
+const expiryAmberThresholdMS = 300
 
 type model struct {
 	addr      string
 	connected bool
 	events    []observer.Event // newest first, bounded to maxEvents
 	lastStats *solution.Stats
+	simNow    int64 // SimTimeMS from the most recently received event
 	msgCh     chan any
 	ready     bool
 	vp        viewport.Model
@@ -101,6 +109,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.envelope.Event.Kind == observer.KindStatsSnapshot {
 			m.lastStats = msg.envelope.Event.Stats
 		}
+		m.simNow = msg.envelope.Event.SimTimeMS
 		if m.ready {
 			atTop := m.vp.AtTop()
 			m.vp.SetContent(m.renderEvents())
@@ -119,7 +128,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) renderEvents() string {
 	lines := make([]string, len(m.events))
 	for i, e := range m.events {
-		lines[i] = renderEvent(e)
+		lines[i] = renderEvent(e, m.simNow)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -144,7 +153,7 @@ func (m model) View() string {
 	return header + "\n" + m.vp.View() + "\n(↑/↓ to scroll, q to quit)"
 }
 
-func renderEvent(e observer.Event) string {
+func renderEvent(e observer.Event, simNow int64) string {
 	line := fmt.Sprintf("#%d %-18s", e.Seq, e.Kind)
 	if e.JobID != "" {
 		line += " job=" + e.JobID
@@ -161,8 +170,26 @@ func renderEvent(e observer.Event) string {
 	if e.Err != "" {
 		return errStyle.Render(line + " err=" + e.Err)
 	}
-	if e.Kind == observer.KindLeaseReclaimed {
-		return reclaimStyle.Render(line)
+
+	// Color-code time-to-expiry on lease rows: how close leaseExpiresAt is
+	// to simNow (the most recent event's SimTimeMS, used as "now" for
+	// display purposes).
+	if (e.Kind == observer.KindLeaseGranted || e.Kind == observer.KindLeaseReclaimed) && e.LeaseExpiresAt > 0 {
+		remaining := e.LeaseExpiresAt - simNow
+		line += fmt.Sprintf(" expiresIn=%dms", remaining)
+		switch {
+		case remaining <= 0:
+			return expiryRed.Render(line)
+		case remaining < expiryAmberThresholdMS:
+			return expiryAmber.Render(line)
+		default:
+			style := expiryGreen
+			if e.Kind == observer.KindLeaseReclaimed {
+				style = reclaimStyle
+			}
+			return style.Render(line)
+		}
 	}
+
 	return line
 }

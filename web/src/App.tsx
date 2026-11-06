@@ -1,30 +1,69 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import './App.css'
-import { connect, type ConnectionStatus, type Envelope } from './ws'
+import EventFeed from './EventFeed'
+import LeasesTable, { deriveLeases } from './LeasesTable'
+import StatsStrip from './StatsStrip'
+import { connect, type ConnectionStatus, type Envelope, type Stats } from './ws'
 
 const MAX_EVENTS = 500
+const MAX_STATS_HISTORY = 50
+
+interface State {
+  events: Envelope[] // newest first, bounded to MAX_EVENTS
+  statsHistory: Stats[] // oldest first, bounded to MAX_STATS_HISTORY
+  lastStats: Stats | null
+  simNow: number
+}
+
+type Action = { type: 'reset' } | { type: 'envelope'; envelope: Envelope }
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'reset':
+      return { events: [], statsHistory: [], lastStats: null, simNow: 0 }
+    case 'envelope': {
+      const events = [action.envelope, ...state.events]
+      if (events.length > MAX_EVENTS) events.length = MAX_EVENTS
+
+      let statsHistory = state.statsHistory
+      let lastStats = state.lastStats
+      if (action.envelope.event.kind === 'stats_snapshot' && action.envelope.event.stats) {
+        lastStats = action.envelope.event.stats
+        statsHistory = [...state.statsHistory, lastStats]
+        if (statsHistory.length > MAX_STATS_HISTORY) {
+          statsHistory = statsHistory.slice(statsHistory.length - MAX_STATS_HISTORY)
+        }
+      }
+
+      return { events, statsHistory, lastStats, simNow: action.envelope.event.simTimeMs }
+    }
+  }
+}
 
 function App() {
   const [hostPort, setHostPort] = useState('localhost:8080')
   const [status, setStatus] = useState<ConnectionStatus>('closed')
-  const [events, setEvents] = useState<Envelope[]>([])
+  const [filter, setFilter] = useState('')
+  const [state, dispatch] = useReducer(reducer, {
+    events: [],
+    statsHistory: [],
+    lastStats: null,
+    simNow: 0,
+  })
   const disconnectRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     disconnectRef.current?.()
-    setEvents([])
+    dispatch({ type: 'reset' })
     disconnectRef.current = connect(
       `ws://${hostPort}/ws`,
-      (env) => {
-        setEvents((prev) => {
-          const next = [env, ...prev]
-          return next.length > MAX_EVENTS ? next.slice(0, MAX_EVENTS) : next
-        })
-      },
+      (envelope) => dispatch({ type: 'envelope', envelope }),
       setStatus,
     )
     return () => disconnectRef.current?.()
   }, [hostPort])
+
+  const leases = deriveLeases(state.events.map((env) => env.event))
 
   return (
     <div className="app">
@@ -41,34 +80,23 @@ function App() {
         <span className={`status status-${status}`}>{status}</span>
       </header>
 
-      <main>
-        <ul className="feed">
-          {events.map((env) => (
-            <li key={env.event.seq} className={`event kind-${env.event.kind}`}>
-              <span className="seq">#{env.event.seq}</span>
-              <span className="kind">{env.event.kind}</span>
-              {env.event.jobId && <span className="field">job={env.event.jobId}</span>}
-              {env.event.workerId && <span className="field">worker={env.event.workerId}</span>}
-              {env.event.prevWorkerId && (
-                <span className="field">prevWorker={env.event.prevWorkerId}</span>
-              )}
-              {env.event.err && <span className="field err">err={env.event.err}</span>}
-              {env.event.stats && (
-                <span className="field">
-                  pending={env.event.stats.Pending} leased={env.event.stats.Leased} completed=
-                  {env.event.stats.Completed} abandoned={env.event.stats.Abandoned}
-                </span>
-              )}
-              {env.event.scenarioName && (
-                <span className="field">scenario={env.event.scenarioName}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-        {events.length === 0 && (
-          <p className="empty">No events yet — waiting for {hostPort}…</p>
-        )}
-      </main>
+      <StatsStrip current={state.lastStats} history={state.statsHistory} />
+
+      <section>
+        <h2>In-flight leases</h2>
+        <LeasesTable leases={leases} simNow={state.simNow} />
+      </section>
+
+      <section>
+        <h2>Event feed</h2>
+        <input
+          className="filter"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="filter by kind, jobId, workerId, or scenario…"
+        />
+        <EventFeed events={state.events} filter={filter} />
+      </section>
     </div>
   )
 }
